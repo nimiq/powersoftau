@@ -26,26 +26,26 @@
 //! simulated with a randomness beacon. The resulting `Accumulator` contains partial zk-SNARK
 //! public parameters for all circuits within a bounded size.
 
+extern crate blake2;
+extern crate byteorder;
+extern crate crossbeam;
+extern crate generic_array;
+extern crate num_cpus;
 extern crate pairing;
 extern crate rand;
-extern crate crossbeam;
-extern crate num_cpus;
-extern crate blake2;
-extern crate generic_array;
 extern crate typenum;
-extern crate byteorder;
 
-use byteorder::{ReadBytesExt, BigEndian};
-use rand::{SeedableRng, Rng, Rand};
-use rand::chacha::ChaChaRng;
+use blake2::{Blake2b512, Digest};
+use byteorder::{BigEndian, ReadBytesExt};
+use generic_array::GenericArray;
 use pairing::bls12_381::*;
 use pairing::*;
+use rand::chacha::ChaChaRng;
+use rand::{Rand, Rng, SeedableRng};
+use std::fmt;
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
-use generic_array::GenericArray;
 use typenum::consts::U64;
-use blake2::{Blake2b, Digest};
-use std::fmt;
 
 // This ceremony is based on the BLS12-381 elliptic curve construction.
 const G1_UNCOMPRESSED_BYTE_SIZE: usize = 96;
@@ -86,14 +86,17 @@ pub const CONTRIBUTION_BYTE_SIZE: usize = (TAU_POWERS_G1_LENGTH * G1_COMPRESSED_
 
 /// Hashes to G2 using the first 32 bytes of `digest`. Panics if `digest` is less
 /// than 32 bytes.
-fn hash_to_g2(mut digest: &[u8]) -> G2
-{
+fn hash_to_g2(mut digest: &[u8]) -> G2 {
     assert!(digest.len() >= 32);
 
     let mut seed = Vec::with_capacity(8);
 
     for _ in 0..8 {
-        seed.push(digest.read_u32::<BigEndian>().expect("assertion above guarantees this to work"));
+        seed.push(
+            digest
+                .read_u32::<BigEndian>()
+                .expect("assertion above guarantees this to work"),
+        );
     }
 
     ChaChaRng::from_seed(&seed).gen()
@@ -102,15 +105,23 @@ fn hash_to_g2(mut digest: &[u8]) -> G2
 #[test]
 fn test_hash_to_g2() {
     assert!(
-        hash_to_g2(&[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33])
-        ==
-        hash_to_g2(&[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,34])
+        hash_to_g2(&[
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 32, 33
+        ]) == hash_to_g2(&[
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 32, 34
+        ])
     );
 
     assert!(
-        hash_to_g2(&[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32])
-        !=
-        hash_to_g2(&[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,33])
+        hash_to_g2(&[
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 32
+        ]) != hash_to_g2(&[
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 33
+        ])
     );
 }
 
@@ -128,19 +139,18 @@ pub struct PublicKey {
     beta_g1: (G1Affine, G1Affine),
     tau_g2: G2Affine,
     alpha_g2: G2Affine,
-    beta_g2: G2Affine
+    beta_g2: G2Affine,
 }
 
 /// Contains the secrets τ, α and β that the participant of the ceremony must destroy.
 pub struct PrivateKey {
     tau: Fr,
     alpha: Fr,
-    beta: Fr
+    beta: Fr,
 }
 
 /// Constructs a keypair given an RNG and a 64-byte transcript `digest`.
-pub fn keypair<R: Rng>(rng: &mut R, digest: &[u8]) -> (PublicKey, PrivateKey)
-{
+pub fn keypair<R: Rng>(rng: &mut R, digest: &[u8]) -> (PublicKey, PrivateKey) {
     assert_eq!(digest.len(), 64);
 
     let tau = Fr::rand(rng);
@@ -154,12 +164,12 @@ pub fn keypair<R: Rng>(rng: &mut R, digest: &[u8]) -> (PublicKey, PrivateKey)
         let g1_s_x = g1_s.mul(x).into_affine();
         // Compute BLAKE2b(personalization | transcript | g^s | g^{s*x})
         let h = {
-            let mut h = Blake2b::default();
-            h.input(&[personalization]);
-            h.input(digest);
-            h.input(g1_s.into_uncompressed().as_ref());
-            h.input(g1_s_x.into_uncompressed().as_ref());
-            h.result()
+            let mut h = Blake2b512::default();
+            h.update(&[personalization]);
+            h.update(digest);
+            h.update(g1_s.into_uncompressed().as_ref());
+            h.update(g1_s_x.into_uncompressed().as_ref());
+            h.finalize()
         };
         // Hash into G2 as g^{s'}
         let g2_s = hash_to_g2(h.as_ref()).into_affine();
@@ -185,8 +195,8 @@ pub fn keypair<R: Rng>(rng: &mut R, digest: &[u8]) -> (PublicKey, PrivateKey)
         PrivateKey {
             tau: tau,
             alpha: alpha,
-            beta: beta
-        }
+            beta: beta,
+        },
     )
 }
 
@@ -194,7 +204,7 @@ pub fn keypair<R: Rng>(rng: &mut R, digest: &[u8]) -> (PublicKey, PrivateKey)
 #[derive(Copy, Clone)]
 pub enum UseCompression {
     Yes,
-    No
+    No,
 }
 
 /// Determines if points should be checked for correctness during deserialization.
@@ -203,16 +213,13 @@ pub enum UseCompression {
 #[derive(Copy, Clone)]
 pub enum CheckForCorrectness {
     Yes,
-    No
+    No,
 }
 
-fn write_point<W, G>(
-    writer: &mut W,
-    p: &G,
-    compression: UseCompression
-) -> io::Result<()>
-    where W: Write,
-          G: CurveAffine
+fn write_point<W, G>(writer: &mut W, p: &G, compression: UseCompression) -> io::Result<()>
+where
+    W: Write,
+    G: CurveAffine,
 {
     match compression {
         UseCompression::Yes => writer.write_all(p.into_compressed().as_ref()),
@@ -225,7 +232,7 @@ fn write_point<W, G>(
 pub enum DeserializationError {
     IoError(io::Error),
     DecodingError(GroupDecodingError),
-    PointAtInfinity
+    PointAtInfinity,
 }
 
 impl fmt::Display for DeserializationError {
@@ -233,7 +240,7 @@ impl fmt::Display for DeserializationError {
         match *self {
             DeserializationError::IoError(ref e) => write!(f, "Disk IO error: {}", e),
             DeserializationError::DecodingError(ref e) => write!(f, "Decoding error: {}", e),
-            DeserializationError::PointAtInfinity => write!(f, "Point at infinity found")
+            DeserializationError::PointAtInfinity => write!(f, "Point at infinity found"),
         }
     }
 }
@@ -252,8 +259,7 @@ impl From<GroupDecodingError> for DeserializationError {
 
 impl PublicKey {
     /// Serialize the public key. Points are always in uncompressed form.
-    pub fn serialize<W: Write>(&self, writer: &mut W) -> io::Result<()>
-    {
+    pub fn serialize<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         write_point(writer, &self.tau_g1.0, UseCompression::No)?;
         write_point(writer, &self.tau_g1.1, UseCompression::No)?;
 
@@ -273,9 +279,10 @@ impl PublicKey {
     /// Deserialize the public key. Points are always in uncompressed form, and
     /// always checked, since there aren't very many of them. Does not allow any
     /// points at infinity.
-    pub fn deserialize<R: Read>(reader: &mut R) -> Result<PublicKey, DeserializationError>
-    {
-        fn read_uncompressed<C: CurveAffine, R: Read>(reader: &mut R) -> Result<C, DeserializationError> {
+    pub fn deserialize<R: Read>(reader: &mut R) -> Result<PublicKey, DeserializationError> {
+        fn read_uncompressed<C: CurveAffine, R: Read>(
+            reader: &mut R,
+        ) -> Result<C, DeserializationError> {
             let mut repr = C::Uncompressed::empty();
             reader.read_exact(repr.as_mut())?;
             let v = repr.into_affine()?;
@@ -306,7 +313,7 @@ impl PublicKey {
             beta_g1: (beta_g1_s, beta_g1_s_beta),
             tau_g2: tau_g2,
             alpha_g2: alpha_g2,
-            beta_g2: beta_g2
+            beta_g2: beta_g2,
         })
     }
 }
@@ -343,7 +350,7 @@ pub struct Accumulator {
     /// beta * tau^0, beta * tau^1, beta * tau^2, ..., beta * tau^{TAU_POWERS_LENGTH - 1}
     pub beta_tau_powers_g1: Vec<G1Affine>,
     /// beta
-    pub beta_g2: G2Affine
+    pub beta_g2: G2Affine,
 }
 
 impl Accumulator {
@@ -354,7 +361,7 @@ impl Accumulator {
             tau_powers_g2: vec![G2Affine::one(); TAU_POWERS_LENGTH],
             alpha_tau_powers_g1: vec![G1Affine::one(); TAU_POWERS_LENGTH],
             beta_tau_powers_g1: vec![G1Affine::one(); TAU_POWERS_LENGTH],
-            beta_g2: G2Affine::one()
+            beta_g2: G2Affine::one(),
         }
     }
 
@@ -362,15 +369,13 @@ impl Accumulator {
     pub fn serialize<W: Write>(
         &self,
         writer: &mut W,
-        compression: UseCompression
-    ) -> io::Result<()>
-    {
+        compression: UseCompression,
+    ) -> io::Result<()> {
         fn write_all<W: Write, C: CurveAffine>(
             writer: &mut W,
             c: &[C],
-            compression: UseCompression
-        ) -> io::Result<()>
-        {
+            compression: UseCompression,
+        ) -> io::Result<()> {
             for c in c {
                 write_point(writer, c, compression)?;
             }
@@ -393,22 +398,19 @@ impl Accumulator {
     pub fn deserialize<R: Read>(
         reader: &mut R,
         compression: UseCompression,
-        checked: CheckForCorrectness
-    ) -> Result<Self, DeserializationError>
-    {
+        checked: CheckForCorrectness,
+    ) -> Result<Self, DeserializationError> {
         fn read_all<R: Read, C: CurveAffine>(
             reader: &mut R,
             size: usize,
             compression: UseCompression,
-            checked: CheckForCorrectness
-        ) -> Result<Vec<C>, DeserializationError>
-        {
+            checked: CheckForCorrectness,
+        ) -> Result<Vec<C>, DeserializationError> {
             fn decompress_all<R: Read, E: EncodedPoint>(
                 reader: &mut R,
                 size: usize,
-                checked: CheckForCorrectness
-            ) -> Result<Vec<E::Affine>, DeserializationError>
-            {
+                checked: CheckForCorrectness,
+            ) -> Result<Vec<E::Affine>, DeserializationError> {
                 // Read the encoded elements
                 let mut res = vec![E::empty(); size];
 
@@ -429,7 +431,10 @@ impl Accumulator {
                 let decoding_error = Arc::new(Mutex::new(None));
 
                 crossbeam::scope(|scope| {
-                    for (source, target) in res.chunks(chunk_size).zip(res_affine.chunks_mut(chunk_size)) {
+                    for (source, target) in res
+                        .chunks(chunk_size)
+                        .zip(res_affine.chunks_mut(chunk_size))
+                    {
                         let decoding_error = decoding_error.clone();
 
                         scope.spawn(move || {
@@ -443,21 +448,24 @@ impl Accumulator {
                                     match checked {
                                         CheckForCorrectness::Yes => {
                                             // Points at infinity are never expected in the accumulator
-                                            source.into_affine().map_err(|e| e.into()).and_then(|source| {
-                                                if source.is_zero() {
-                                                    Err(DeserializationError::PointAtInfinity)
-                                                } else {
-                                                    Ok(source)
-                                                }
-                                            })
-                                        },
-                                        CheckForCorrectness::No => source.into_affine_unchecked().map_err(|e| e.into())
+                                            source.into_affine().map_err(|e| e.into()).and_then(
+                                                |source| {
+                                                    if source.is_zero() {
+                                                        Err(DeserializationError::PointAtInfinity)
+                                                    } else {
+                                                        Ok(source)
+                                                    }
+                                                },
+                                            )
+                                        }
+                                        CheckForCorrectness::No => {
+                                            source.into_affine_unchecked().map_err(|e| e.into())
+                                        }
                                     }
-                                }
-                                {
+                                } {
                                     Ok(source) => {
                                         *target = source;
-                                    },
+                                    }
                                     Err(e) => {
                                         *decoding_error.lock().unwrap() = Some(e);
                                     }
@@ -467,19 +475,19 @@ impl Accumulator {
                     }
                 });
 
-                match Arc::try_unwrap(decoding_error).unwrap().into_inner().unwrap() {
-                    Some(e) => {
-                        Err(e)
-                    },
-                    None => {
-                        Ok(res_affine)
-                    }
+                match Arc::try_unwrap(decoding_error)
+                    .unwrap()
+                    .into_inner()
+                    .unwrap()
+                {
+                    Some(e) => Err(e),
+                    None => Ok(res_affine),
                 }
             }
 
             match compression {
                 UseCompression::Yes => decompress_all::<_, C::Compressed>(reader, size, checked),
-                UseCompression::No => decompress_all::<_, C::Uncompressed>(reader, size, checked)
+                UseCompression::No => decompress_all::<_, C::Uncompressed>(reader, size, checked),
             }
         }
 
@@ -494,13 +502,12 @@ impl Accumulator {
             tau_powers_g2: tau_powers_g2,
             alpha_tau_powers_g1: alpha_tau_powers_g1,
             beta_tau_powers_g1: beta_tau_powers_g1,
-            beta_g2: beta_g2
+            beta_g2: beta_g2,
         })
     }
 
     /// Transforms the accumulator with a private key.
-    pub fn transform(&mut self, key: &PrivateKey)
-    {
+    pub fn transform(&mut self, key: &PrivateKey) {
         // Construct the powers of tau
         let mut taupowers = vec![Fr::zero(); TAU_POWERS_G1_LENGTH];
         let chunk_size = TAU_POWERS_G1_LENGTH / num_cpus::get();
@@ -521,30 +528,35 @@ impl Accumulator {
 
         /// Exponentiate a large number of points, with an optional coefficient to be applied to the
         /// exponent.
-        fn batch_exp<C: CurveAffine>(bases: &mut [C], exp: &[C::Scalar], coeff: Option<&C::Scalar>) {
+        fn batch_exp<C: CurveAffine>(
+            bases: &mut [C],
+            exp: &[C::Scalar],
+            coeff: Option<&C::Scalar>,
+        ) {
             assert_eq!(bases.len(), exp.len());
             let mut projective = vec![C::Projective::zero(); bases.len()];
             let chunk_size = bases.len() / num_cpus::get();
 
             // Perform wNAF over multiple cores, placing results into `projective`.
             crossbeam::scope(|scope| {
-                for ((bases, exp), projective) in bases.chunks_mut(chunk_size)
-                                                       .zip(exp.chunks(chunk_size))
-                                                       .zip(projective.chunks_mut(chunk_size))
+                for ((bases, exp), projective) in bases
+                    .chunks_mut(chunk_size)
+                    .zip(exp.chunks(chunk_size))
+                    .zip(projective.chunks_mut(chunk_size))
                 {
                     scope.spawn(move || {
                         let mut wnaf = Wnaf::new();
 
-                        for ((base, exp), projective) in bases.iter_mut()
-                                                              .zip(exp.iter())
-                                                              .zip(projective.iter_mut())
+                        for ((base, exp), projective) in
+                            bases.iter_mut().zip(exp.iter()).zip(projective.iter_mut())
                         {
                             let mut exp = *exp;
                             if let Some(coeff) = coeff {
                                 exp.mul_assign(coeff);
                             }
 
-                            *projective = wnaf.base(base.into_projective(), 1).scalar(exp.into_repr());
+                            *projective =
+                                wnaf.base(base.into_projective(), 1).scalar(exp.into_repr());
                         }
                     });
                 }
@@ -552,8 +564,7 @@ impl Accumulator {
 
             // Perform batch normalization
             crossbeam::scope(|scope| {
-                for projective in projective.chunks_mut(chunk_size)
-                {
+                for projective in projective.chunks_mut(chunk_size) {
                     scope.spawn(move || {
                         C::Projective::batch_normalization(projective);
                     });
@@ -567,25 +578,41 @@ impl Accumulator {
         }
 
         batch_exp(&mut self.tau_powers_g1, &taupowers[0..], None);
-        batch_exp(&mut self.tau_powers_g2, &taupowers[0..TAU_POWERS_LENGTH], None);
-        batch_exp(&mut self.alpha_tau_powers_g1, &taupowers[0..TAU_POWERS_LENGTH], Some(&key.alpha));
-        batch_exp(&mut self.beta_tau_powers_g1, &taupowers[0..TAU_POWERS_LENGTH], Some(&key.beta));
+        batch_exp(
+            &mut self.tau_powers_g2,
+            &taupowers[0..TAU_POWERS_LENGTH],
+            None,
+        );
+        batch_exp(
+            &mut self.alpha_tau_powers_g1,
+            &taupowers[0..TAU_POWERS_LENGTH],
+            Some(&key.alpha),
+        );
+        batch_exp(
+            &mut self.beta_tau_powers_g1,
+            &taupowers[0..TAU_POWERS_LENGTH],
+            Some(&key.beta),
+        );
         self.beta_g2 = self.beta_g2.mul(key.beta).into_affine();
     }
 }
 
 /// Verifies a transformation of the `Accumulator` with the `PublicKey`, given a 64-byte transcript `digest`.
-pub fn verify_transform(before: &Accumulator, after: &Accumulator, key: &PublicKey, digest: &[u8]) -> bool
-{
+pub fn verify_transform(
+    before: &Accumulator,
+    after: &Accumulator,
+    key: &PublicKey,
+    digest: &[u8],
+) -> bool {
     assert_eq!(digest.len(), 64);
 
     let compute_g2_s = |g1_s: G1Affine, g1_s_x: G1Affine, personalization: u8| {
-        let mut h = Blake2b::default();
-        h.input(&[personalization]);
-        h.input(digest);
-        h.input(g1_s.into_uncompressed().as_ref());
-        h.input(g1_s_x.into_uncompressed().as_ref());
-        hash_to_g2(h.result().as_ref()).into_affine()
+        let mut h = Blake2b512::default();
+        h.update(&[personalization]);
+        h.update(digest);
+        h.update(g1_s.into_uncompressed().as_ref());
+        h.update(g1_s_x.into_uncompressed().as_ref());
+        hash_to_g2(h.finalize().as_ref()).into_affine()
     };
 
     let tau_g2_s = compute_g2_s(key.tau_g1.0, key.tau_g1.1, 0);
@@ -612,34 +639,58 @@ pub fn verify_transform(before: &Accumulator, after: &Accumulator, key: &PublicK
     }
 
     // Did the participant multiply the previous tau by the new one?
-    if !same_ratio((before.tau_powers_g1[1], after.tau_powers_g1[1]), (tau_g2_s, key.tau_g2)) {
+    if !same_ratio(
+        (before.tau_powers_g1[1], after.tau_powers_g1[1]),
+        (tau_g2_s, key.tau_g2),
+    ) {
         return false;
     }
 
     // Did the participant multiply the previous alpha by the new one?
-    if !same_ratio((before.alpha_tau_powers_g1[0], after.alpha_tau_powers_g1[0]), (alpha_g2_s, key.alpha_g2)) {
+    if !same_ratio(
+        (before.alpha_tau_powers_g1[0], after.alpha_tau_powers_g1[0]),
+        (alpha_g2_s, key.alpha_g2),
+    ) {
         return false;
     }
 
     // Did the participant multiply the previous beta by the new one?
-    if !same_ratio((before.beta_tau_powers_g1[0], after.beta_tau_powers_g1[0]), (beta_g2_s, key.beta_g2)) {
+    if !same_ratio(
+        (before.beta_tau_powers_g1[0], after.beta_tau_powers_g1[0]),
+        (beta_g2_s, key.beta_g2),
+    ) {
         return false;
     }
-    if !same_ratio((before.beta_tau_powers_g1[0], after.beta_tau_powers_g1[0]), (before.beta_g2, after.beta_g2)) {
+    if !same_ratio(
+        (before.beta_tau_powers_g1[0], after.beta_tau_powers_g1[0]),
+        (before.beta_g2, after.beta_g2),
+    ) {
         return false;
     }
 
     // Are the powers of tau correct?
-    if !same_ratio(power_pairs(&after.tau_powers_g1), (after.tau_powers_g2[0], after.tau_powers_g2[1])) {
+    if !same_ratio(
+        power_pairs(&after.tau_powers_g1),
+        (after.tau_powers_g2[0], after.tau_powers_g2[1]),
+    ) {
         return false;
     }
-    if !same_ratio(power_pairs(&after.tau_powers_g2), (after.tau_powers_g1[0], after.tau_powers_g1[1])) {
+    if !same_ratio(
+        power_pairs(&after.tau_powers_g2),
+        (after.tau_powers_g1[0], after.tau_powers_g1[1]),
+    ) {
         return false;
     }
-    if !same_ratio(power_pairs(&after.alpha_tau_powers_g1), (after.tau_powers_g2[0], after.tau_powers_g2[1])) {
+    if !same_ratio(
+        power_pairs(&after.alpha_tau_powers_g1),
+        (after.tau_powers_g2[0], after.tau_powers_g2[1]),
+    ) {
         return false;
     }
-    if !same_ratio(power_pairs(&after.beta_tau_powers_g1), (after.tau_powers_g2[0], after.tau_powers_g2[1])) {
+    if !same_ratio(
+        power_pairs(&after.beta_tau_powers_g1),
+        (after.tau_powers_g2[0], after.tau_powers_g2[1]),
+    ) {
         return false;
     }
 
@@ -659,10 +710,9 @@ pub fn verify_transform(before: &Accumulator, after: &Accumulator, key: &PublicK
 /// e(g, (as)*r1 + (bs)*r2 + (cs)*r3) = e(g^s, a*r1 + b*r2 + c*r3)
 ///
 /// ... with high probability.
-fn merge_pairs<G: CurveAffine>(v1: &[G], v2: &[G]) -> (G, G)
-{
+fn merge_pairs<G: CurveAffine>(v1: &[G], v2: &[G]) -> (G, G) {
+    use rand::thread_rng;
     use std::sync::{Arc, Mutex};
-    use rand::{thread_rng};
 
     assert_eq!(v1.len(), v2.len());
 
@@ -709,9 +759,8 @@ fn merge_pairs<G: CurveAffine>(v1: &[G], v2: &[G]) -> (G, G)
 
 /// Construct a single pair (s, s^x) for a vector of
 /// the form [1, x, x^2, x^3, ...].
-fn power_pairs<G: CurveAffine>(v: &[G]) -> (G, G)
-{
-    merge_pairs(&v[0..(v.len()-1)], &v[1..])
+fn power_pairs<G: CurveAffine>(v: &[G]) -> (G, G) {
+    merge_pairs(&v[0..(v.len() - 1)], &v[1..])
 }
 
 #[test]
@@ -738,11 +787,7 @@ fn test_power_pairs() {
 }
 
 /// Checks if pairs have the same ratio.
-fn same_ratio<G1: CurveAffine>(
-    g1: (G1, G1),
-    g2: (G1::Pair, G1::Pair)
-) -> bool
-{
+fn same_ratio<G1: CurveAffine>(g1: (G1, G1), g2: (G1::Pair, G1::Pair)) -> bool {
     g1.0.pairing_with(&g2.1) == g1.1.pairing_with(&g2.0)
 }
 
@@ -779,19 +824,20 @@ fn test_accumulator_serialization() {
     let mut v = Vec::with_capacity(ACCUMULATOR_BYTE_SIZE - 64);
     acc.serialize(&mut v, UseCompression::No).unwrap();
     assert_eq!(v.len(), ACCUMULATOR_BYTE_SIZE - 64);
-    let deserialized = Accumulator::deserialize(&mut &v[..], UseCompression::No, CheckForCorrectness::No).unwrap();
+    let deserialized =
+        Accumulator::deserialize(&mut &v[..], UseCompression::No, CheckForCorrectness::No).unwrap();
     assert!(acc == deserialized);
 }
 
 /// Compute BLAKE2b("")
 pub fn blank_hash() -> GenericArray<u8, U64> {
-    Blake2b::new().result()
+    Blake2b512::new().finalize()
 }
 
 /// Abstraction over a reader which hashes the data being read.
 pub struct HashReader<R: Read> {
     reader: R,
-    hasher: Blake2b
+    hasher: Blake2b512,
 }
 
 impl<R: Read> HashReader<R> {
@@ -799,13 +845,13 @@ impl<R: Read> HashReader<R> {
     pub fn new(reader: R) -> Self {
         HashReader {
             reader: reader,
-            hasher: Blake2b::default()
+            hasher: Blake2b512::default(),
         }
     }
 
     /// Destroy this reader and return the hash of what was read.
     pub fn into_hash(self) -> GenericArray<u8, U64> {
-        self.hasher.result()
+        self.hasher.finalize()
     }
 }
 
@@ -814,7 +860,7 @@ impl<R: Read> Read for HashReader<R> {
         let bytes = self.reader.read(buf)?;
 
         if bytes > 0 {
-            self.hasher.input(&buf[0..bytes]);
+            self.hasher.update(&buf[0..bytes]);
         }
 
         Ok(bytes)
@@ -824,7 +870,7 @@ impl<R: Read> Read for HashReader<R> {
 /// Abstraction over a writer which hashes the data being written.
 pub struct HashWriter<W: Write> {
     writer: W,
-    hasher: Blake2b
+    hasher: Blake2b512,
 }
 
 impl<W: Write> HashWriter<W> {
@@ -832,13 +878,13 @@ impl<W: Write> HashWriter<W> {
     pub fn new(writer: W) -> Self {
         HashWriter {
             writer: writer,
-            hasher: Blake2b::default()
+            hasher: Blake2b512::default(),
         }
     }
 
     /// Destroy this writer and return the hash of what was written.
     pub fn into_hash(self) -> GenericArray<u8, U64> {
-        self.hasher.result()
+        self.hasher.finalize()
     }
 }
 
@@ -847,7 +893,7 @@ impl<W: Write> Write for HashWriter<W> {
         let bytes = self.writer.write(buf)?;
 
         if bytes > 0 {
-            self.hasher.input(&buf[0..bytes]);
+            self.hasher.update(&buf[0..bytes]);
         }
 
         Ok(bytes)
