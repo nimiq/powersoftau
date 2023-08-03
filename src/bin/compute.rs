@@ -1,8 +1,5 @@
-extern crate blake2;
-extern crate byteorder;
-extern crate powersoftau;
-extern crate rand;
-
+use ark_mnt6_753::MNT6_753;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, Validate};
 use powersoftau::*;
 
 use std::fs::OpenOptions;
@@ -12,12 +9,11 @@ fn main() {
     // Create an RNG based on a mixture of system randomness and user provided randomness
     let mut rng = {
         use blake2::{Blake2b512, Digest};
-        use byteorder::{BigEndian, ReadBytesExt};
-        use rand::chacha::ChaChaRng;
-        use rand::{OsRng, Rng, SeedableRng};
+        use rand::{rngs::OsRng, Rng, SeedableRng};
+        use rand_chacha::ChaChaRng;
 
         let h = {
-            let mut system_rng = OsRng::new().unwrap();
+            let mut system_rng = OsRng::default();
             let mut h = Blake2b512::default();
 
             // Gather 1024 bytes of entropy from the system
@@ -38,17 +34,11 @@ fn main() {
             h.finalize()
         };
 
-        let mut digest = &h[..];
-
         // Interpret the first 32 bytes of the digest as 8 32-bit words
-        let mut seed = [0u32; 8];
-        for i in 0..8 {
-            seed[i] = digest
-                .read_u32::<BigEndian>()
-                .expect("digest is large enough for this to work");
-        }
+        let mut seed = [0; 32];
+        seed.copy_from_slice(&h[..32]);
 
-        ChaChaRng::from_seed(&seed)
+        ChaChaRng::from_seed(seed)
     };
 
     // Try to load `./challenge` from disk.
@@ -61,10 +51,10 @@ fn main() {
         let metadata = reader
             .metadata()
             .expect("unable to get filesystem metadata for `./challenge`");
-        if metadata.len() != (ACCUMULATOR_BYTE_SIZE as u64) {
+        if metadata.len() != (Sizes::<MNT6_753>::new().accumulator_byte_size() as u64) {
             panic!(
                 "The size of `./challenge` should be {}, but it's {}, so something isn't right.",
-                ACCUMULATOR_BYTE_SIZE,
+                Sizes::<MNT6_753>::new().accumulator_byte_size(),
                 metadata.len()
             );
         }
@@ -98,7 +88,7 @@ fn main() {
 
     // Load the current accumulator into memory
     let mut current_accumulator =
-        Accumulator::deserialize(&mut reader, UseCompression::No, CheckForCorrectness::No)
+        Accumulator::deserialize_with_mode(&mut reader, Compress::No, Validate::No)
             .expect("unable to read uncompressed accumulator");
 
     // Get the hash of the current accumulator
@@ -120,12 +110,12 @@ fn main() {
     // Write the transformed accumulator (in compressed form, to save upload bandwidth for disadvantaged
     // players.)
     current_accumulator
-        .serialize(&mut writer, UseCompression::Yes)
+        .serialize_compressed(&mut writer)
         .expect("unable to write transformed accumulator");
 
     // Write the public key
     pubkey
-        .serialize(&mut writer)
+        .serialize_uncompressed(&mut writer)
         .expect("unable to write public key");
 
     // Get the hash of the contribution, so the user can compare later

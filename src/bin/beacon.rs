@@ -1,13 +1,6 @@
-extern crate blake2;
-extern crate byteorder;
-extern crate powersoftau;
-extern crate rand;
-
-#[macro_use]
-extern crate hex_literal;
-
-extern crate crypto;
-
+use ark_mnt6_753::MNT6_753;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, Validate};
+use hex_literal::hex;
 use powersoftau::*;
 
 use std::fs::OpenOptions;
@@ -16,11 +9,10 @@ use std::io::{BufReader, BufWriter, Read, Write};
 fn main() {
     // Create an RNG based on the outcome of the random beacon
     let mut rng = {
-        use byteorder::{BigEndian, ReadBytesExt};
         use crypto::digest::Digest;
         use crypto::sha2::Sha256;
-        use rand::chacha::ChaChaRng;
         use rand::SeedableRng;
+        use rand_chacha::ChaChaRng;
 
         // Place block hash here (block number #514200)
         let mut cur_hash: [u8; 32] =
@@ -52,16 +44,10 @@ fn main() {
         }
         println!("");
 
-        let mut digest = &cur_hash[..];
+        let mut seed = [0; 32];
+        seed.copy_from_slice(&cur_hash[..32]);
 
-        let mut seed = [0u32; 8];
-        for i in 0..8 {
-            seed[i] = digest
-                .read_u32::<BigEndian>()
-                .expect("digest is large enough for this to work");
-        }
-
-        ChaChaRng::from_seed(&seed)
+        ChaChaRng::from_seed(seed)
     };
 
     // Try to load `./challenge` from disk.
@@ -74,10 +60,10 @@ fn main() {
         let metadata = reader
             .metadata()
             .expect("unable to get filesystem metadata for `./challenge`");
-        if metadata.len() != (ACCUMULATOR_BYTE_SIZE as u64) {
+        if metadata.len() != (Sizes::<MNT6_753>::new().accumulator_byte_size() as u64) {
             panic!(
                 "The size of `./challenge` should be {}, but it's {}, so something isn't right.",
-                ACCUMULATOR_BYTE_SIZE,
+                Sizes::<MNT6_753>::new().accumulator_byte_size(),
                 metadata.len()
             );
         }
@@ -111,7 +97,7 @@ fn main() {
 
     // Load the current accumulator into memory
     let mut current_accumulator =
-        Accumulator::deserialize(&mut reader, UseCompression::No, CheckForCorrectness::No)
+        Accumulator::deserialize_with_mode(&mut reader, Compress::No, Validate::No)
             .expect("unable to read uncompressed accumulator");
 
     // Get the hash of the current accumulator
@@ -133,12 +119,12 @@ fn main() {
     // Write the transformed accumulator (in compressed form, to save upload bandwidth for disadvantaged
     // players.)
     current_accumulator
-        .serialize(&mut writer, UseCompression::Yes)
+        .serialize_compressed(&mut writer)
         .expect("unable to write transformed accumulator");
 
     // Write the public key
     pubkey
-        .serialize(&mut writer)
+        .serialize_uncompressed(&mut writer)
         .expect("unable to write public key");
 
     // Get the hash of the contribution, so the user can compare later
