@@ -59,6 +59,12 @@ pub struct Sizes<P: Pairing> {
     _curve: PhantomData<P>,
 }
 
+impl<P: Pairing> Default for Sizes<P> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<P: Pairing> Sizes<P> {
     pub fn new() -> Self {
         let g1 = <P as Pairing>::G1Affine::zero();
@@ -175,7 +181,7 @@ pub fn keypair<R: Rng>(rng: &mut R, digest: &[u8]) -> (PublicKey, PrivateKey) {
         // Compute BLAKE2b(personalization | transcript | g^s | g^{s*x})
         let h = {
             let mut h = Blake2b512::default();
-            h.update(&[personalization]);
+            h.update([personalization]);
             h.update(digest);
             g1_s.serialize_uncompressed(&mut h).unwrap();
             g1_s_x.serialize_uncompressed(&mut h).unwrap();
@@ -242,6 +248,12 @@ pub struct Accumulator {
     pub beta_g2: G2Affine,
 }
 
+impl Default for Accumulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Accumulator {
     /// Constructs an "initial" accumulator with τ = 1, α = 1, β = 1.
     pub fn new() -> Self {
@@ -267,7 +279,7 @@ impl Accumulator {
         crossbeam::scope(|scope| {
             for (i, taupowers) in taupowers.chunks_mut(chunk_size).enumerate() {
                 scope.spawn(move |_| {
-                    let mut acc = key.tau.pow(&[(i * chunk_size) as u64]);
+                    let mut acc = key.tau.pow([(i * chunk_size) as u64]);
 
                     for t in taupowers {
                         *t = acc;
@@ -351,7 +363,7 @@ pub fn verify_transform(
 
     let compute_g2_s = |g1_s: G1Affine, g1_s_x: G1Affine, personalization: u8| {
         let mut h = Blake2b512::default();
-        h.update(&[personalization]);
+        h.update([personalization]);
         h.update(digest);
         g1_s.serialize_uncompressed(&mut h).unwrap();
         g1_s_x.serialize_uncompressed(&mut h).unwrap();
@@ -595,7 +607,7 @@ impl<R: Read> HashReader<R> {
     /// Construct a new `HashReader` given an existing `reader` by value.
     pub fn new(reader: R) -> Self {
         HashReader {
-            reader: reader,
+            reader,
             hasher: Blake2b512::default(),
         }
     }
@@ -628,7 +640,7 @@ impl<W: Write> HashWriter<W> {
     /// Construct a new `HashWriter` given an existing `writer` by value.
     pub fn new(writer: W) -> Self {
         HashWriter {
-            writer: writer,
+            writer,
             hasher: Blake2b512::default(),
         }
     }

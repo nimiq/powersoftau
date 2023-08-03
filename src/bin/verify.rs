@@ -12,7 +12,7 @@ use std::ops::Neg;
 fn into_hex(h: &[u8]) -> String {
     let mut f = String::new();
 
-    for byte in &h[..] {
+    for byte in h {
         f += &format!("{:02x}", byte);
     }
 
@@ -118,7 +118,7 @@ fn main() {
             println!(" ... FAILED");
             panic!("INVALID RESPONSE FILE!");
         } else {
-            println!("");
+            println!();
         }
 
         current_accumulator = response_file_accumulator;

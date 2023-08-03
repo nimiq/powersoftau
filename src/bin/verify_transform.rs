@@ -133,7 +133,7 @@ fn main() {
             }
             print!(" ");
         }
-        println!("");
+        println!();
     }
 
     println!("Verification succeeded! Writing to `./new_challenge`...");

@@ -30,7 +30,7 @@ fn main() {
                 for b in cur_hash.iter() {
                     print!("{:02x}", b);
                 }
-                println!("");
+                println!();
             }
 
             let mut h = Sha256::new();
@@ -42,7 +42,7 @@ fn main() {
         for b in cur_hash.iter() {
             print!("{:02x}", b);
         }
-        println!("");
+        println!();
 
         let mut seed = [0; 32];
         seed.copy_from_slice(&cur_hash[..32]);
@@ -113,7 +113,7 @@ fn main() {
 
     // Write the hash of the input accumulator
     writer
-        .write_all(&current_accumulator_hash.as_ref())
+        .write_all(current_accumulator_hash.as_ref())
         .expect("unable to write BLAKE2b hash of input accumulator");
 
     // Write the transformed accumulator (in compressed form, to save upload bandwidth for disadvantaged
@@ -144,7 +144,7 @@ fn main() {
             }
             print!(" ");
         }
-        println!("");
+        println!();
     }
 
     println!("\n");

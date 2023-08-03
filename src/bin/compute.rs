@@ -19,7 +19,7 @@ fn main() {
             // Gather 1024 bytes of entropy from the system
             for _ in 0..1024 {
                 let r: u8 = system_rng.gen();
-                h.update(&[r]);
+                h.update([r]);
             }
 
             // Ask the user to provide some information for additional entropy
@@ -30,7 +30,7 @@ fn main() {
                 .expect("expected to read some random text from the user");
 
             // Hash it all up to make a seed
-            h.update(&user_input.as_bytes());
+            h.update(user_input.as_bytes());
             h.finalize()
         };
 
@@ -104,7 +104,7 @@ fn main() {
 
     // Write the hash of the input accumulator
     writer
-        .write_all(&current_accumulator_hash.as_ref())
+        .write_all(current_accumulator_hash.as_ref())
         .expect("unable to write BLAKE2b hash of input accumulator");
 
     // Write the transformed accumulator (in compressed form, to save upload bandwidth for disadvantaged
@@ -135,7 +135,7 @@ fn main() {
             }
             print!(" ");
         }
-        println!("");
+        println!();
     }
 
     println!("\n");
