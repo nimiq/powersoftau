@@ -81,7 +81,7 @@ pub const CONTRIBUTION_BYTE_SIZE: usize = (TAU_POWERS_G1_LENGTH * G1_COMPRESSED_
 
 /// Hashes to G2 using the first 32 bytes of `digest`. Panics if `digest` is less
 /// than 32 bytes.
-fn hash_to_g2(mut digest: &[u8]) -> G2Projective {
+fn hash_to_g2(digest: &[u8]) -> G2Projective {
     assert!(digest.len() >= 32);
 
     let mut seed = [0; 32];
@@ -253,7 +253,8 @@ impl Accumulator {
                     }
                 });
             }
-        });
+        })
+        .unwrap();
 
         /// Exponentiate a large number of points, with an optional coefficient to be applied to the
         /// exponent.
@@ -274,8 +275,6 @@ impl Accumulator {
                     .zip(projective.chunks_mut(chunk_size))
                 {
                     scope.spawn(move |_| {
-                        let mut wnaf = Wnaf::new();
-
                         for ((base, exp), projective) in
                             bases.iter_mut().zip(exp.iter()).zip(projective.iter_mut())
                         {
@@ -286,21 +285,17 @@ impl Accumulator {
 
                             // PITODO: base * exp, check if arkworks does that efficiently already
                             // or whether we need to use some scalar-mul thingy
-                            *projective =
-                                wnaf.base(base.into_projective(), 1).scalar(exp.into_repr());
+                            *projective = *base * exp;
                         }
                     });
                 }
-            });
+            })
+            .unwrap();
 
             // Perform batch normalization
-            let affine = Projective::<C>::normalize_batch(&projective);
-
             // Turn it all back into affine points
-            // for (projective, affine) in projective.iter().zip(bases.iter_mut()) {
-            //     *affine = projective.into_affine();
-            // }
-            // PITODO: Return affine
+            let affine = Projective::<C>::normalize_batch(&projective);
+            bases.copy_from_slice(&affine);
         }
 
         batch_exp(&mut self.tau_powers_g1, &taupowers[0..], None);
@@ -451,20 +446,18 @@ fn merge_pairs<C: SWCurveConfig>(v1: &[Affine<C>], v2: &[Affine<C>]) -> (Affine<
             let s = s.clone();
             let sx = sx.clone();
 
-            scope.spawn(move || {
+            scope.spawn(move |_| {
                 // We do not need to be overly cautious of the RNG
                 // used for this check.
                 let rng = &mut thread_rng();
 
-                let mut wnaf = Wnaf::new();
                 let mut local_s = Projective::<C>::zero();
                 let mut local_sx = Projective::<C>::zero();
 
                 for (v1, v2) in v1.iter().zip(v2.iter()) {
                     let rho = C::ScalarField::rand(rng);
-                    let mut wnaf = wnaf.scalar(rho.into_repr());
-                    let v1 = wnaf.base(v1.into_projective());
-                    let v2 = wnaf.base(v2.into_projective());
+                    let v1 = *v1 * rho;
+                    let v2 = *v2 * rho;
 
                     local_s += v1;
                     local_sx += v2;
@@ -474,7 +467,8 @@ fn merge_pairs<C: SWCurveConfig>(v1: &[Affine<C>], v2: &[Affine<C>]) -> (Affine<
                 *sx.lock().unwrap() += local_sx;
             });
         }
-    });
+    })
+    .unwrap();
 
     let s = s.lock().unwrap().into_affine();
     let sx = sx.lock().unwrap().into_affine();
@@ -490,6 +484,7 @@ fn power_pairs<C: SWCurveConfig>(v: &[Affine<C>]) -> (Affine<C>, Affine<C>) {
 
 #[test]
 fn test_power_pairs() {
+    use ark_std::One;
     use rand::thread_rng;
 
     let rng = &mut thread_rng();
