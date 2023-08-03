@@ -51,10 +51,10 @@ fn main() {
         let metadata = reader
             .metadata()
             .expect("unable to get filesystem metadata for `./challenge`");
-        if metadata.len() != (Sizes::<MNT6_753>::new().accumulator_byte_size() as u64) {
+        if metadata.len() != (Sizes::<MNT6_753>::new().accumulator_byte_size_with_hash() as u64) {
             panic!(
                 "The size of `./challenge` should be {}, but it's {}, so something isn't right.",
-                Sizes::<MNT6_753>::new().accumulator_byte_size(),
+                Sizes::<MNT6_753>::new().accumulator_byte_size_with_hash(),
                 metadata.len()
             );
         }

@@ -73,11 +73,12 @@ impl<P: Pairing> Sizes<P> {
     }
 
     /// The size of the accumulator on disk.
-    pub fn accumulator_byte_size(&self) -> usize {
+    pub fn accumulator_byte_size_with_hash(&self) -> usize {
         (TAU_POWERS_G1_LENGTH * self.g1_uncompressed_byte_size) + // g1 tau powers
         (TAU_POWERS_LENGTH * self.g2_uncompressed_byte_size) + // g2 tau powers
         (TAU_POWERS_LENGTH * self.g1_uncompressed_byte_size) + // alpha tau powers
         (TAU_POWERS_LENGTH * self.g1_uncompressed_byte_size) // beta tau powers
+        + 32 // lengths of vectors
         + self.g2_uncompressed_byte_size // beta in g2
         + 64 // blake2b hash of previous contribution
     }
@@ -215,7 +216,7 @@ fn test_pubkey_serialization() {
     let mut v = vec![];
     pk.serialize_uncompressed(&mut v).unwrap();
     assert_eq!(v.len(), Sizes::<MNT6_753>::new().public_key_size());
-    // PITODO: checked or unchecked?
+
     let deserialized = PublicKey::deserialize_uncompressed(&mut &v[..]).unwrap();
     assert!(pk == deserialized);
 }
@@ -568,11 +569,11 @@ fn test_accumulator_serialization() {
     assert!(verify_transform(&before, &acc, &pk, &digest));
     digest[0] = !digest[0];
     assert!(!verify_transform(&before, &acc, &pk, &digest));
-    let mut v = Vec::with_capacity(Sizes::<MNT6_753>::new().accumulator_byte_size() - 64);
+    let mut v = Vec::with_capacity(Sizes::<MNT6_753>::new().accumulator_byte_size_with_hash() - 64);
     acc.serialize_with_mode(&mut v, Compress::No).unwrap();
     assert_eq!(
         v.len(),
-        Sizes::<MNT6_753>::new().accumulator_byte_size() - 64
+        Sizes::<MNT6_753>::new().accumulator_byte_size_with_hash() - 64
     );
     let deserialized =
         Accumulator::deserialize_with_mode(&mut &v[..], Compress::No, Validate::No).unwrap();

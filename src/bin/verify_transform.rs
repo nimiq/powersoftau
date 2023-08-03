@@ -18,10 +18,10 @@ fn main() {
         let metadata = challenge_reader
             .metadata()
             .expect("unable to get filesystem metadata for `./challenge`");
-        if metadata.len() != (sizes.accumulator_byte_size() as u64) {
+        if metadata.len() != (sizes.accumulator_byte_size_with_hash() as u64) {
             panic!(
                 "The size of `./challenge` should be {}, but it's {}, so something isn't right.",
-                sizes.accumulator_byte_size(),
+                sizes.accumulator_byte_size_with_hash(),
                 metadata.len()
             );
         }
