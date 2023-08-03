@@ -95,11 +95,11 @@ fn main() {
     let current_accumulator_hash = reader.into_hash();
 
     // Construct our keypair using the RNG we created above
-    let (pubkey, privkey) = keypair(&mut rng, current_accumulator_hash.as_ref());
+    let (pub_key, priv_key) = keypair(&mut rng, current_accumulator_hash.as_ref());
 
     // Perform the transformation
     println!("Computing, this could take a while...");
-    current_accumulator.transform(&privkey);
+    current_accumulator.transform(&priv_key);
     println!("Writing your contribution to `./response`...");
 
     // Write the hash of the input accumulator
@@ -114,7 +114,7 @@ fn main() {
         .expect("unable to write transformed accumulator");
 
     // Write the public key
-    pubkey
+    pub_key
         .serialize_uncompressed(&mut writer)
         .expect("unable to write public key");
 

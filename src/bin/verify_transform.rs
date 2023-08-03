@@ -104,7 +104,7 @@ fn main() {
         Accumulator::deserialize_with_mode(&mut response_reader, Compress::Yes, Validate::Yes)
             .expect("wasn't able to deserialize the response file's accumulator");
 
-    // Load the response's pubkey
+    // Load the response's pub_key
     let public_key = PublicKey::deserialize_uncompressed(&mut response_reader)
         .expect("wasn't able to deserialize the response file's public key");
 

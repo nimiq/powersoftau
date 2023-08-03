@@ -32,12 +32,15 @@ use ark_ec::*;
 use ark_ff::fields::Field;
 use ark_mnt6_753::*;
 use ark_serialize::*;
-use ark_std::UniformRand;
+use ark_std::{
+    rand::{Rng, SeedableRng},
+    UniformRand,
+};
 use blake2::{Blake2b512, Digest};
 use generic_array::GenericArray;
 use num_traits::identities::Zero;
-use rand::{Rng, SeedableRng};
 use rand_chacha::ChaChaRng;
+use rayon::prelude::*;
 use std::io::{self, Read, Write};
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
@@ -104,6 +107,81 @@ impl<P: Pairing> Sizes<P> {
         + self.g2_compressed_byte_size // beta in g2
         + 64 // blake2b hash of input accumulator
         + self.public_key_size() // public key
+    }
+}
+
+/// Compute BLAKE2b("")
+pub fn blank_hash() -> GenericArray<u8, U64> {
+    Blake2b512::new().finalize()
+}
+
+/// Abstraction over a reader which hashes the data being read.
+pub struct HashReader<R: Read> {
+    reader: R,
+    hasher: Blake2b512,
+}
+
+impl<R: Read> HashReader<R> {
+    /// Construct a new `HashReader` given an existing `reader` by value.
+    pub fn new(reader: R) -> Self {
+        HashReader {
+            reader,
+            hasher: Blake2b512::default(),
+        }
+    }
+
+    /// Destroy this reader and return the hash of what was read.
+    pub fn into_hash(self) -> GenericArray<u8, U64> {
+        self.hasher.finalize()
+    }
+}
+
+impl<R: Read> Read for HashReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let bytes = self.reader.read(buf)?;
+
+        if bytes > 0 {
+            self.hasher.update(&buf[0..bytes]);
+        }
+
+        Ok(bytes)
+    }
+}
+
+/// Abstraction over a writer which hashes the data being written.
+pub struct HashWriter<W: Write> {
+    writer: W,
+    hasher: Blake2b512,
+}
+
+impl<W: Write> HashWriter<W> {
+    /// Construct a new `HashWriter` given an existing `writer` by value.
+    pub fn new(writer: W) -> Self {
+        HashWriter {
+            writer,
+            hasher: Blake2b512::default(),
+        }
+    }
+
+    /// Destroy this writer and return the hash of what was written.
+    pub fn into_hash(self) -> GenericArray<u8, U64> {
+        self.hasher.finalize()
+    }
+}
+
+impl<W: Write> Write for HashWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let bytes = self.writer.write(buf)?;
+
+        if bytes > 0 {
+            self.hasher.update(&buf[0..bytes]);
+        }
+
+        Ok(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
     }
 }
 
@@ -276,19 +354,17 @@ impl Accumulator {
         let chunk_size = TAU_POWERS_G1_LENGTH / num_cpus::get();
 
         // Construct exponents in parallel
-        crossbeam::scope(|scope| {
-            for (i, taupowers) in taupowers.chunks_mut(chunk_size).enumerate() {
-                scope.spawn(move |_| {
-                    let mut acc = key.tau.pow([(i * chunk_size) as u64]);
+        taupowers
+            .par_chunks_mut(chunk_size)
+            .enumerate()
+            .for_each(|(i, taupowers)| {
+                let mut acc = key.tau.pow([(i * chunk_size) as u64]);
 
-                    for t in taupowers {
-                        *t = acc;
-                        acc *= key.tau;
-                    }
-                });
-            }
-        })
-        .unwrap();
+                for t in taupowers {
+                    *t = acc;
+                    acc *= key.tau;
+                }
+            });
 
         /// Exponentiate a large number of points, with an optional coefficient to be applied to the
         /// exponent.
@@ -298,33 +374,22 @@ impl Accumulator {
             coeff: Option<&C::ScalarField>,
         ) {
             assert_eq!(bases.len(), exp.len());
-            let mut projective = vec![Projective::<C>::zero(); bases.len()];
-            let chunk_size = bases.len() / num_cpus::get();
 
             // Perform wNAF over multiple cores, placing results into `projective`.
-            crossbeam::scope(|scope| {
-                for ((bases, exp), projective) in bases
-                    .chunks_mut(chunk_size)
-                    .zip(exp.chunks(chunk_size))
-                    .zip(projective.chunks_mut(chunk_size))
-                {
-                    scope.spawn(move |_| {
-                        for ((base, exp), projective) in
-                            bases.iter_mut().zip(exp.iter()).zip(projective.iter_mut())
-                        {
-                            let mut exp = *exp;
-                            if let Some(coeff) = coeff {
-                                exp *= coeff;
-                            }
+            let projective: Vec<_> = bases
+                .par_iter()
+                .zip(exp)
+                .map(|(base, exp)| {
+                    let mut exp = *exp;
+                    if let Some(coeff) = coeff {
+                        exp *= coeff;
+                    }
 
-                            // PITODO: base * exp, check if arkworks does that efficiently already
-                            // or whether we need to use some scalar-mul thingy
-                            *projective = *base * exp;
-                        }
-                    });
-                }
-            })
-            .unwrap();
+                    // PITODO: base * exp, check if arkworks does that efficiently already
+                    // or whether we need to use some scalar-mul thingy
+                    *base * exp
+                })
+                .collect();
 
             // Perform batch normalization
             // Turn it all back into affine points
@@ -470,39 +535,36 @@ fn merge_pairs<C: SWCurveConfig>(v1: &[Affine<C>], v2: &[Affine<C>]) -> (Affine<
 
     assert_eq!(v1.len(), v2.len());
 
-    let chunk = (v1.len() / num_cpus::get()) + 1;
+    let chunk_size = (v1.len() / num_cpus::get()) + 1;
 
     let s = Arc::new(Mutex::new(Projective::<C>::zero()));
     let sx = Arc::new(Mutex::new(Projective::<C>::zero()));
 
-    crossbeam::scope(|scope| {
-        for (v1, v2) in v1.chunks(chunk).zip(v2.chunks(chunk)) {
+    v1.par_chunks(chunk_size)
+        .zip(v2.par_chunks(chunk_size))
+        .for_each(|(v1, v2)| {
             let s = s.clone();
             let sx = sx.clone();
 
-            scope.spawn(move |_| {
-                // We do not need to be overly cautious of the RNG
-                // used for this check.
-                let rng = &mut thread_rng();
+            // We do not need to be overly cautious of the RNG
+            // used for this check.
+            let rng = &mut thread_rng();
 
-                let mut local_s = Projective::<C>::zero();
-                let mut local_sx = Projective::<C>::zero();
+            let mut local_s = Projective::<C>::zero();
+            let mut local_sx = Projective::<C>::zero();
 
-                for (v1, v2) in v1.iter().zip(v2.iter()) {
-                    let rho = C::ScalarField::rand(rng);
-                    let v1 = *v1 * rho;
-                    let v2 = *v2 * rho;
+            for (v1, v2) in v1.iter().zip(v2.iter()) {
+                let rho = C::ScalarField::rand(rng);
+                let v1 = *v1 * rho;
+                let v2 = *v2 * rho;
 
-                    local_s += v1;
-                    local_sx += v2;
-                }
+                local_s += v1;
+                local_sx += v2;
+            }
 
-                *s.lock().unwrap() += local_s;
-                *sx.lock().unwrap() += local_sx;
-            });
-        }
-    })
-    .unwrap();
+            *s.lock().unwrap() += local_s;
+            *sx.lock().unwrap() += local_sx;
+        });
 
     let s = s.lock().unwrap().into_affine();
     let sx = sx.lock().unwrap().into_affine();
@@ -590,79 +652,4 @@ fn test_accumulator_serialization() {
     let deserialized =
         Accumulator::deserialize_with_mode(&mut &v[..], Compress::No, Validate::No).unwrap();
     assert!(acc == deserialized);
-}
-
-/// Compute BLAKE2b("")
-pub fn blank_hash() -> GenericArray<u8, U64> {
-    Blake2b512::new().finalize()
-}
-
-/// Abstraction over a reader which hashes the data being read.
-pub struct HashReader<R: Read> {
-    reader: R,
-    hasher: Blake2b512,
-}
-
-impl<R: Read> HashReader<R> {
-    /// Construct a new `HashReader` given an existing `reader` by value.
-    pub fn new(reader: R) -> Self {
-        HashReader {
-            reader,
-            hasher: Blake2b512::default(),
-        }
-    }
-
-    /// Destroy this reader and return the hash of what was read.
-    pub fn into_hash(self) -> GenericArray<u8, U64> {
-        self.hasher.finalize()
-    }
-}
-
-impl<R: Read> Read for HashReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let bytes = self.reader.read(buf)?;
-
-        if bytes > 0 {
-            self.hasher.update(&buf[0..bytes]);
-        }
-
-        Ok(bytes)
-    }
-}
-
-/// Abstraction over a writer which hashes the data being written.
-pub struct HashWriter<W: Write> {
-    writer: W,
-    hasher: Blake2b512,
-}
-
-impl<W: Write> HashWriter<W> {
-    /// Construct a new `HashWriter` given an existing `writer` by value.
-    pub fn new(writer: W) -> Self {
-        HashWriter {
-            writer,
-            hasher: Blake2b512::default(),
-        }
-    }
-
-    /// Destroy this writer and return the hash of what was written.
-    pub fn into_hash(self) -> GenericArray<u8, U64> {
-        self.hasher.finalize()
-    }
-}
-
-impl<W: Write> Write for HashWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let bytes = self.writer.write(buf)?;
-
-        if bytes > 0 {
-            self.hasher.update(&buf[0..bytes]);
-        }
-
-        Ok(bytes)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.writer.flush()
-    }
 }

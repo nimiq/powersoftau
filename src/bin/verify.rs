@@ -3,10 +3,12 @@ use ark_ec::{CurveGroup, Group};
 use ark_mnt6_753::{G1Projective, G2Projective};
 use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, Validate};
+use blake2::Blake2b512;
+use blake2::Digest;
 use powersoftau::*;
 
 use std::fs::OpenOptions;
-use std::io::{self, BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter, Write};
 use std::ops::Neg;
 
 fn into_hex(h: &[u8]) -> String {
@@ -23,17 +25,12 @@ fn into_hex(h: &[u8]) -> String {
 // given the current state of the accumulator and the last
 // response file hash.
 fn get_challenge_file_hash(acc: &Accumulator, last_response_file_hash: &[u8; 64]) -> [u8; 64] {
-    let sink = io::sink();
-    let mut sink = HashWriter::new(sink);
+    let mut sink = Blake2b512::new();
 
     sink.write_all(last_response_file_hash).unwrap();
-
     acc.serialize_uncompressed(&mut sink).unwrap();
 
-    let mut tmp = [0; 64];
-    tmp.copy_from_slice(sink.into_hash().as_slice());
-
-    tmp
+    sink.finalize().into()
 }
 
 // Computes the hash of the response file, given the new
@@ -44,19 +41,13 @@ fn get_response_file_hash(
     pub_key: &PublicKey,
     last_challenge_file_hash: &[u8; 64],
 ) -> [u8; 64] {
-    let sink = io::sink();
-    let mut sink = HashWriter::new(sink);
+    let mut sink = Blake2b512::new();
 
     sink.write_all(last_challenge_file_hash).unwrap();
-
     acc.serialize_compressed(&mut sink).unwrap();
-
     pub_key.serialize_uncompressed(&mut sink).unwrap();
 
-    let mut tmp = [0; 64];
-    tmp.copy_from_slice(sink.into_hash().as_slice());
-
-    tmp
+    sink.finalize().into()
 }
 
 fn main() {
