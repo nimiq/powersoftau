@@ -213,7 +213,7 @@ pub fn keypair<R: Rng>(rng: &mut R, digest: &[u8]) -> (PublicKey, PrivateKey) {
 }
 
 #[test]
-fn test_pubkey_serialization() {
+fn test_pub_key_serialization() {
     use rand::thread_rng;
 
     let rng = &mut thread_rng();

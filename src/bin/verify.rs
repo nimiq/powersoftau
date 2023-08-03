@@ -41,7 +41,7 @@ fn get_challenge_file_hash(acc: &Accumulator, last_response_file_hash: &[u8; 64]
 // file's hash.
 fn get_response_file_hash(
     acc: &Accumulator,
-    pubkey: &PublicKey,
+    pub_key: &PublicKey,
     last_challenge_file_hash: &[u8; 64],
 ) -> [u8; 64] {
     let sink = io::sink();
@@ -51,7 +51,7 @@ fn get_response_file_hash(
 
     acc.serialize_compressed(&mut sink).unwrap();
 
-    pubkey.serialize_uncompressed(&mut sink).unwrap();
+    pub_key.serialize_uncompressed(&mut sink).unwrap();
 
     let mut tmp = [0; 64];
     tmp.copy_from_slice(sink.into_hash().as_slice());
@@ -92,7 +92,7 @@ fn main() {
                 .expect("unable to read uncompressed accumulator");
 
         // Deserialize the public key provided by the player.
-        let response_file_pubkey = PublicKey::deserialize_uncompressed(&mut reader)
+        let response_file_pub_key = PublicKey::deserialize_uncompressed(&mut reader)
             .expect("wasn't able to deserialize the response file's public key");
 
         // Compute the hash of the response file. (we had it in uncompressed
@@ -100,7 +100,7 @@ fn main() {
         // participants bandwidth.)
         last_response_file_hash = get_response_file_hash(
             &response_file_accumulator,
-            &response_file_pubkey,
+            &response_file_pub_key,
             &last_challenge_file_hash,
         );
 
@@ -112,7 +112,7 @@ fn main() {
         if !verify_transform(
             &current_accumulator,
             &response_file_accumulator,
-            &response_file_pubkey,
+            &response_file_pub_key,
             &last_challenge_file_hash,
         ) {
             println!(" ... FAILED");
@@ -128,8 +128,8 @@ fn main() {
 
     // Create the parameters for various 2^m circuit depths.
     for m in 0..22 {
-        let paramname = format!("phase1radix2m{}", m);
-        println!("Creating {}", paramname);
+        let param_name = format!("phase1radix2m{}", m);
+        println!("Creating {}", param_name);
 
         let degree = 1 << m;
         let domain =
@@ -191,7 +191,7 @@ fn main() {
             .read(false)
             .write(true)
             .create_new(true)
-            .open(paramname)
+            .open(param_name)
             .expect("unable to create parameter file in this directory");
 
         let mut writer = BufWriter::new(writer);
