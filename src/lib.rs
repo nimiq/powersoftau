@@ -47,7 +47,7 @@ use std::sync::{Arc, Mutex};
 use typenum::consts::U64;
 
 /// The accumulator supports circuits with 2^21 multiplication gates.
-const TAU_POWERS_LENGTH: usize = 1 << 21;
+const TAU_POWERS_LENGTH: usize = 1 << 22;
 /// More tau powers are needed in G1 because the Groth16 H query
 /// includes terms of the form tau^i * (tau^m - 1) = tau^(i+m) - tau^i
 /// where the largest i = m - 2, requiring the computation of tau^(2m - 2)
